@@ -1,0 +1,45 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'c_interpreter'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=c_interpreter",
+                    "--package=c_interpreter"
+                ],
+                "filter": {
+                    "name": "c_interpreter",
+                    "kind": "bin"
+                }
+            },
+            "args": ["C:/Users/xoaop/Desktop/Rust/c_complier/foo.c"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'c_interpreter'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=c_interpreter",
+                    "--package=c_interpreter"
+                ],
+                "filter": {
+                    "name": "c_interpreter",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
