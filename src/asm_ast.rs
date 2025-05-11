@@ -5,24 +5,29 @@ use crate::ast;
 pub struct AssemblyAst {
     pub program: Box<Program>,
 }
+
 #[derive(Debug)]
 pub struct Program {
     pub function_definition: Box<Function>,
 }
+
 #[derive(Debug)]
 pub struct Function {
     pub identifier: Identifier, 
     pub instructions: Vec<Instruction>,
 }
+
 #[derive(Debug)]
 pub struct Identifier {
     pub name: String,
 }
+
 #[derive(Debug)]
 pub enum Instruction {
     Mov(Operand, Operand), 
     Ret,
 }
+
 #[derive(Debug)]
 pub enum Operand {
     Imm(i64), 
