@@ -1,32 +1,50 @@
-use core::str;
+use core::fmt;
 use crate::ast;
 
 #[derive(Debug)]
 pub struct AssemblyAst {
-    program: Box<Program>,
+    pub program: Box<Program>,
 }
 #[derive(Debug)]
 pub struct Program {
-    function_definition: Box<Function>,
+    pub function_definition: Box<Function>,
 }
 #[derive(Debug)]
 pub struct Function {
-    identifier: Identifier, 
-    instructions: Vec<Instruction>,
+    pub identifier: Identifier, 
+    pub instructions: Vec<Instruction>,
 }
 #[derive(Debug)]
 pub struct Identifier {
-    name: String,
+    pub name: String,
 }
 #[derive(Debug)]
-enum Instruction {
+pub enum Instruction {
     Mov(Operand, Operand), 
     Ret,
 }
 #[derive(Debug)]
-enum Operand {
+pub enum Operand {
     Imm(i64), 
     Register,
+}
+
+impl fmt::Display for Instruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Instruction::Mov(operand1, operand2) => write!(f, "movq\t{}, {}", operand1, operand2),
+            Instruction::Ret => write!(f, "ret"),
+        }
+    }
+}
+
+impl fmt::Display for Operand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Operand::Imm(i64) => write!(f, "${}", i64),
+            Operand::Register => write!(f, "{}", "%rax"),
+        }
+    }
 }
 
 fn trans_operand(exp: &ast::AstNode) -> Operand {

@@ -2,9 +2,11 @@ mod lexer;
 mod parser;
 mod ast;
 mod asm_ast;
+mod asm_generate;
 
 use std::env;
 use asm_ast::trans_ast_to_asmast;
+use asm_generate::generate_assembly;
 use lexer::get_token_list;
 use parser::Parser;
 
@@ -36,7 +38,7 @@ fn main() {
 
     println!("{:#?}", &assast);
 
+    generate_assembly(&assast);
 
-    
 
 }
