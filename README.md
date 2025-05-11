@@ -1,5 +1,5 @@
-# C Compiler
+# A C Compiler in Rust
 
-A C compiler written in Rust.
+A C compiler written by rust
 
-This project is inspired by the book *"Writing a C Compiler"*.
+Reference book: *"Writing a C Compiler"*.
