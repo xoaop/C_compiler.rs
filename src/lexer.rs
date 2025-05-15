@@ -5,7 +5,7 @@ use std::{fs, usize};
 #[derive(Debug)]
 #[derive(Clone)]
 pub enum TokenType {
-    Integer(i64), //Integer 1234
+    Integer(i32), //Integer 1234
     Identifier(String), //Identifier main
     LelfBracket, //Left Bracket (
     RightBracket, //Right Bracket )
@@ -15,25 +15,44 @@ pub enum TokenType {
     KeywordInt,
     KeywordVoid,
     KeywordReturn,
+    Tilde, // ~
+    Hyphen, // -
+    TwoHyphen,// --
+    Plus,      // +
+    Asterisk,      // *
+    ForwardSlash,     // /
+    Percent,   // %
     // Other,
 }
 
 impl TokenType {
-    
-    
-    pub fn as_value<T: 'static>(&self) -> Option<&T> {
-            match self {
-                TokenType::Integer(value) if std::any::TypeId::of::<T>() == std::any::TypeId::of::<i64>() => {
-                    // 安全地将值转换为引用
-                    Some(unsafe { &*(value as *const i64 as *const T) })
-                }
-                TokenType::Identifier(name) if std::any::TypeId::of::<T>() == std::any::TypeId::of::<String>() => {
-                    Some(unsafe { &*(name as *const String as *const T) })
-                }
-                _ => None,
-            }
+    pub fn is_binary_operator(&self) -> bool {
+        match self {
+            TokenType::Plus
+            | TokenType::Hyphen
+            | TokenType::Asterisk
+            | TokenType::ForwardSlash
+            | TokenType::Percent => true,
+            _ => false,
         }
+            
+    }
 }
+
+
+// impl TokenType {
+//     pub fn as_value<T: 'static>(&self) -> Option<&T> {
+//             match self {
+//                 TokenType::Integer(value) if std::any::TypeId::of::<T>() == std::any::TypeId::of::<i64>() => {
+//                     Some(unsafe { &*(value as *const i32 as *const T) })
+//                 }
+//                 TokenType::Identifier(name) if std::any::TypeId::of::<T>() == std::any::TypeId::of::<String>() => {
+//                     Some(unsafe { &*(name as *const String as *const T) })
+//                 }
+//                 _ => None,
+//             }
+//         }
+// }
 
 
 
@@ -72,6 +91,18 @@ impl TokenList{
         return None;
     }
 
+    pub fn current_token(&self) -> Option<&Token> {
+        self.tokens.get(self.index)
+    }
+
+    pub fn forward(&mut self) {
+        self.index += 1;
+    }
+
+    pub fn back(&mut self) {
+        self.index -= 1;
+    }
+
     pub fn reset(&mut self) {
         self.index = 0;
     }
@@ -83,7 +114,15 @@ impl TokenList{
 
 
 fn get_regex_map() -> Vec<(&'static str, TokenType)> {
+    // 注意先后顺序
     vec![
+        (r"^--", TokenType::TwoHyphen),
+        (r"^\+", TokenType::Plus),
+        (r"^\*", TokenType::Asterisk),
+        (r"^/", TokenType::ForwardSlash),
+        (r"^%", TokenType::Percent),
+        (r"^-", TokenType::Hyphen),
+        (r"^~", TokenType::Tilde),
         (r"^\(", TokenType::LelfBracket),
         (r"^\)", TokenType::RightBracket),
         (r"^\{", TokenType::LcurlyBracket),
@@ -124,7 +163,7 @@ pub fn get_token_list(path: &str) -> Option<TokenList> {
                 let new_token_type = match token_type {
                     TokenType::Identifier(_) => TokenType::Identifier(_mat.as_str().to_string()),
                     TokenType::Integer(_) => {
-                        match _mat.as_str().parse::<i64>() {
+                        match _mat.as_str().parse::<i32>() {
                             Ok(parsed_val) => TokenType::Integer(parsed_val),
                             Err(_) => {
                                 eprintln!("Failed to parse integer token");

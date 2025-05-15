@@ -1,11 +1,11 @@
-use crate::asm_ast::{self, AssemblyAst};
+use crate::asmt;
 use std::fs::File;
 use std::io::Write;
 
 
 
-pub fn generate_assembly(assembly_ast: &AssemblyAst) {
-    let file_path = "output.asm";
+pub fn generate_assembly(assembly_ast: &asmt::Asmt) {
+    let file_path = "output.s";
     let mut file = match File::create(file_path) {
         Ok(f) => f,
         Err(e) => {
@@ -24,7 +24,7 @@ pub fn generate_assembly(assembly_ast: &AssemblyAst) {
 
 
 
-fn generate_at_program(program: &asm_ast::Program) -> String  {
+fn generate_at_program(program: &asmt::Program) -> String  {
     let mut result = String::new();
 
     result.push_str(&generate_at_function(&program.function_definition));
@@ -35,10 +35,10 @@ fn generate_at_program(program: &asm_ast::Program) -> String  {
 }
 
 
-fn generate_at_function(function: &asm_ast::Function) -> String {
+fn generate_at_function(function: &asmt::Function) -> String {
     let mut result = String::new();
 
-    result.push_str(format!("\t.globl {}\n{}:\n", function.identifier.name, function.identifier.name).as_str()); 
+    result.push_str(format!("\t.globl {}\n{}:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n", function.identifier, function.identifier).as_str()); 
 
     for inst in function.instructions.iter() {
         result.push_str(format!("\t{}\n", inst).as_str());

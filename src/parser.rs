@@ -1,75 +1,150 @@
-use crate::ast::{AstNode, Ast};
-use crate::lexer::{Token, TokenList, TokenType};
+use crate::ast;
+use crate::lexer;
+use crate::lexer::get_token_list;
 use std::mem;
 
 
 pub struct Parser {
-    token_list: TokenList,
+    token_list: lexer::TokenList,
 }
 
 impl Parser {
 
-    pub fn new(token_list: TokenList) -> Self {
+    pub fn new(token_list: lexer::TokenList) -> Self {
         Parser { token_list }
     }
 
-    fn expert(&mut self, expected: &TokenType) -> Option<&Token> {
-        let actual = self.token_list.next_token();
 
-        if mem::discriminant(&actual.unwrap().token_type) != mem::discriminant(expected) {
-            eprintln!("语法错误！");
+    fn expert(&mut self, expected: &lexer::TokenType) -> &lexer::Token {
+        let actual = self.token_list.next_token().unwrap();
+
+        if mem::discriminant(&actual.token_type) != mem::discriminant(expected) {
+            eprintln!("语法错误！expert: {:?}, actual: {:?}", expected, actual.token_type);
             std::process::exit(1);
         }
 
         return actual;
     }
 
-    fn parse_exp(&mut self) -> AstNode {
-        let exp_token = self.expert(&TokenType::Integer(0)).unwrap();
+    fn parse_binop(token: &lexer::TokenType) -> ast::AstNode {
+        match token {
+            lexer::TokenType::Plus => ast::AstNode::Add,
+            lexer::TokenType::Hyphen => ast::AstNode::Sub,
+            lexer::TokenType::Asterisk => ast::AstNode::Mul,
+            lexer::TokenType::ForwardSlash => ast::AstNode::Div,
+            lexer::TokenType::Percent => ast::AstNode::Mod,
 
-        let new_exp_node = AstNode::Constant { value: *exp_token.token_type.as_value::<i64>().unwrap()};
-
-        return new_exp_node;
-
+            _ => {
+                std::panic!(
+                    "Unsupported binary operator: {:?}", token
+                )
+            }
+        }
     }
 
-    fn parse_statement(&mut self) ->Box<AstNode> {
-
-        self.expert(&TokenType::KeywordReturn);
-
-        let return_val = self.parse_exp();
-
-        self.expert(&TokenType::Semicolon);
-
-        return Box::new( AstNode::Return { exp: Box::new(return_val) } );
+    fn precedence(&self, operator: &lexer::TokenType) -> i32 {
+        match operator {
+            lexer::TokenType::Plus | lexer::TokenType::Hyphen => 45,
+            lexer::TokenType::Asterisk | lexer::TokenType::ForwardSlash => 50,
+            _ => { std::panic!("unvaild operator!") } 
+        }
     }
 
-    fn parse_function(&mut self) -> Box<AstNode> {
-        self.expert(&TokenType::KeywordInt);
+    fn parse_exp(&mut self, min_prec: i32) -> ast::AstNode {
+        let mut left = self.parse_factor();
 
-        let identifier = self.expert(&TokenType::Identifier("".to_string())).unwrap().token_type.as_value::<String>().unwrap().clone();
+        while let Some(next_token) = self.token_list.next_token() {
+            let token_type = next_token.token_type.clone();
 
-        self.expert(&TokenType::LelfBracket);
-        self.expert(&TokenType::RightBracket);
+            if token_type.is_binary_operator() && self.precedence(&token_type) > min_prec {
+                let prec = self.precedence(&token_type);
 
-        self.expert(&TokenType::LcurlyBracket);
+                let operator = Self::parse_binop(&token_type);
+                let right = self.parse_exp(prec);
+                left = ast::AstNode::Binary { binary_operator: Box::new(operator), left: Box::new(left), right: Box::new(right) };
+            }
+            else {
+                self.token_list.back();
+                break;
+            }
+        }
+
+        left
+    }
+
+    fn parse_factor(&mut self) -> ast::AstNode {
+        let next_token = self.token_list.next_token().expect("Tokenlist is at the end!");
+
+        match next_token.token_type {
+            lexer::TokenType::Integer(i32) => {
+                return ast::AstNode::Constant { value: i32 };
+            }
+            lexer::TokenType::Tilde => {
+                let operator = ast::AstNode::Complement;
+                let inner_exp = self.parse_factor();
+                return ast::AstNode::Unary { unary_operator: Box::new(operator), exp: Box::new(inner_exp) };
+            }
+            lexer::TokenType::Hyphen => {
+                let operator = ast::AstNode::Negate;
+                let inner_exp = self.parse_factor();
+                return ast::AstNode::Unary { unary_operator: Box::new(operator), exp: Box::new(inner_exp) };
+            }
+            lexer::TokenType::LelfBracket => {
+                let inner_exp = self.parse_exp(0);
+                self.expert(&lexer::TokenType::RightBracket);
+                return inner_exp;
+            }
+            _ => {
+                eprintln!("Unexpected token: {:?}", next_token.token_type);
+                std::process::exit(1);
+            }
+        }
+    }
+ 
+    fn parse_statement(&mut self) ->Box<ast::AstNode> {
+
+        self.expert(&lexer::TokenType::KeywordReturn);
+
+        let return_val = self.parse_exp(0);
+
+        self.expert(&lexer::TokenType::Semicolon);
+
+        return Box::new( ast::AstNode::Return { exp: Box::new(return_val) } );
+    }
+
+    fn parse_function(&mut self) -> Box<ast::AstNode> {
+        self.expert(&lexer::TokenType::KeywordInt);
+
+        let identifier_token = &self.expert(&lexer::TokenType::Identifier("".to_string()));
+
+        let identifier = match &identifier_token.token_type {
+            lexer::TokenType::Identifier(name) => name.clone(),
+            _ => {
+                        std::process::exit(1);
+            }
+        };
+
+        self.expert(&lexer::TokenType::LelfBracket);
+        self.expert(&lexer::TokenType::RightBracket);
+
+        self.expert(&lexer::TokenType::LcurlyBracket);
 
         let statement = self.parse_statement();
 
-        self.expert(&TokenType::RcurlyBracket);
+        self.expert(&lexer::TokenType::RcurlyBracket);
 
-        return Box::new(AstNode::Function { name: Box::new( AstNode::Identifier(identifier) ), body: statement });
+        return Box::new(ast::AstNode::Function { name: Box::new( ast::AstNode::Identifier(identifier) ), body: statement });
     }
 
-    fn parse_program(&mut self) -> Box<AstNode> {
+    fn parse_program(&mut self) -> Box<ast::AstNode> {
         let function = self.parse_function();
 
-        return Box::new( AstNode::Program { function_definition: function } );
+        return Box::new( ast::AstNode::Program { function_definition: function } );
     }
 
-    pub fn parse(&mut self) -> Ast {
+    pub fn parse(&mut self) -> ast::Ast {
 
-        return Ast { root: self.parse_program() };
+        return ast::Ast { root: self.parse_program() };
     }
 
 
