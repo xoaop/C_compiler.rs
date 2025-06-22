@@ -1,14 +1,15 @@
-mod lexer;
-mod parser;
-mod ast;
-mod asmt;
 mod asmgen;
+mod asmt;
+mod lex;
+mod parse;
 mod tacky;
+mod global;
 
-use std::env;
+
 
 use asmgen::generate_assembly;
-
+use asmt::Asmt;
+use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -19,33 +20,29 @@ fn main() {
     }
 
     let path = &args[1];
-    let path = r"C:\Users\xoaop\Desktop\Rust\c_complier\test\foo.c";
-    println!("Reading file: {}", path);
-    // Open the file
 
-    let tokens = lexer::get_token_list(path).expect("获取token列表失败");
-
-    for token in tokens.iter() {
-        println!("{:?}", token);
-    }
-
-    let mut parser = parser::Parser::new(tokens);
-
+    
+    let tokens = lex::lexer::get_token_list(path).expect("获取token列表失败");
+    
+    println!("{:#?}", &tokens);
+    
+    let mut variable_context = global::VariableContext::new();
+    let mut parser = parse::parser::Parser::new(tokens, &mut variable_context);
+    
     let ast = parser.parse();
-
+    
     println!("{:#?}", &ast);
+    
+    let mut tackilizer = tacky::Tackilizer::new(parser.variable_context);
 
-    let tacky_p = tacky::emit_program(&ast.root);
+    let tacky_p = tackilizer.emit_program(&ast.root);
 
     println!("{:#?}", &tacky_p);
 
-    let asmt = asmt::emit_program(&tacky_p);
+    let mut asmt = Asmt::new();
+    let p = asmt.emit_program(&tacky_p);
 
-    println!("{:#?}", &asmt);
+    println!("{:#?}", &p);
 
-    let asmt = asmt::Asmt { program: asmt };
-
-    generate_assembly(&asmt);
-
-
+    generate_assembly(&p);
 }
