@@ -14,6 +14,7 @@ pub enum Instruction {
     JumpIfZero(Operand, String),
     JumpIfNotZero(Operand, String),
     Label(String),
+    FunCall(String, Vec<Operand>, Operand), // fun_name args dst
 }
 
 #[derive(Debug, Clone)]
@@ -48,12 +49,13 @@ pub enum Operand {
 
 #[derive(Debug)]
 pub struct Program {
-    pub function_def: Function,
+    pub functions: Vec<Function>,
 }
 
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
+    pub params: Vec<String>,
     pub body: Vec<Instruction>,
 }
 
@@ -114,30 +116,33 @@ impl<'variable_context> Tackilizer<'variable_context> {
 
     pub fn emit_program(&mut self, p: &ast::AstNode) -> Program {
         match p {
-            ast::AstNode::Program {
-                function_definition,
-            } => Program {
-                function_def: self.emit_function(function_definition),
-            },
+            ast::AstNode::Program { function_decl } => {
+                let mut funcs = Vec::<Function>::new();
+
+                for func in function_decl {
+                    let function = self.emit_function(func);
+                    if function.body.len() != 0 {
+                        funcs.push(function);
+                    }
+                }
+
+                return Program { functions: funcs };
+            }
+
             _ => {
-                std::process::exit(1);
+                panic!("");
             }
         }
     }
 
     fn emit_function(&mut self, f: &ast::AstNode) -> Function {
         match f {
-            ast::AstNode::Function { name, block } => {
-                let name = match name.as_ref() {
-                    ast::AstNode::Identifier(name) => name.clone(),
-                    _ => {
-                        std::process::exit(1);
-                    }
-                };
+            ast::AstNode::FunctionDecl { name, params, body } => {
+                let name = name.clone();
 
                 let mut instructions = Vec::<Instruction>::new();
 
-                if let ast::AstNode::Compound { block } = block.as_ref() {
+                if let ast::AstNode::Compound { block } = body.as_ref() {
                     for block_item in block {
                         self.emit_tacky(&block_item, &mut instructions);
                     }
@@ -145,11 +150,12 @@ impl<'variable_context> Tackilizer<'variable_context> {
 
                 Function {
                     name: name,
+                    params: params.clone(),
                     body: instructions,
                 }
             }
             _ => {
-                std::process::exit(1);
+                panic!("");
             }
         }
     }
@@ -236,6 +242,7 @@ impl<'variable_context> Tackilizer<'variable_context> {
 
                     return dst;
                 }
+
                 _ => {
                     let l = self.emit_tacky(left, instructions);
                     let r = self.emit_tacky(right, instructions);
@@ -414,16 +421,16 @@ impl<'variable_context> Tackilizer<'variable_context> {
                 let continue_label_str = format!("continue_{}", id);
 
                 instructions.push(Instruction::Label(continue_label_str.clone()));
-                
+
                 self.emit_tacky(body, instructions);
-                
+
                 let condition_result = self.emit_tacky(condition, instructions);
 
                 instructions.push(Instruction::JumpIfZero(
                     condition_result,
                     break_label_str.clone(),
                 ));
-                
+
                 instructions.push(Instruction::Jump(continue_label_str));
 
                 instructions.push(Instruction::Label(break_label_str));
@@ -441,6 +448,19 @@ impl<'variable_context> Tackilizer<'variable_context> {
                 return Operand::Nothing;
             }
 
+            ast::AstNode::FunctionCall { identifier, args } => {
+                let mut args_result = Vec::<Operand>::new();
+                for arg in args {
+                    args_result.push(self.emit_tacky(arg, instructions));
+                }
+
+                let dst = Operand::Var(self.variable_context.make_temporary(None));
+                let result = Instruction::FunCall(identifier.clone(), args_result, dst.clone());
+                instructions.push(result);
+
+                return dst;
+            }
+
             ast::AstNode::Compound { block } => {
                 for block_item in block {
                     self.emit_tacky(block_item, instructions);
@@ -453,9 +473,10 @@ impl<'variable_context> Tackilizer<'variable_context> {
                 return Operand::Nothing;
             }
 
+            ast::AstNode::FunctionDecl { .. } => Operand::Nothing,
+
             _ => {
-                eprintln!("Unimplement tacky!");
-                std::process::exit(1);
+                panic!("Unimplement tacky {:?}", e);
             }
         }
     }
@@ -480,7 +501,7 @@ fn convert_operator(op: &ast::AstNode) -> Operator {
 
         _ => {
             eprintln!("Unimplement tacky operator {:?}", op);
-            std::process::exit(1);
+            panic!("");
         }
     }
 }

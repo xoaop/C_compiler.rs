@@ -1,10 +1,10 @@
-use std::{collections::HashMap, fmt::Binary};
+use std::collections::HashMap;
 
 use crate::tacky;
 
 #[derive(Debug)]
 pub struct Program {
-    pub function_definition: Function,
+    pub function_definitions: Vec<Function>,
 }
 
 #[derive(Debug)]
@@ -30,6 +30,11 @@ pub enum Instruction {
     Label(String),
 
     AllocateStack(Operand), // 分配栈空间，相当于给rsp（栈顶指针）减去一个数
+    DeallocateStack(Operand),
+
+    Push(Operand),
+    Call(String),
+
     Ret,
 }
 
@@ -80,15 +85,28 @@ pub enum Operand {
 #[derive(Debug, Clone)]
 pub enum Register {
     AX,
+    CX,
     DX,
+    DI,
+    SI,
+    R8,
+    R9,
     R10,
     R11,
 }
 
+const ARG_REGISTERS: [Operand; 6] = [
+    Operand::Reg(Register::DI),
+    Operand::Reg(Register::SI),
+    Operand::Reg(Register::DX),
+    Operand::Reg(Register::CX),
+    Operand::Reg(Register::R8),
+    Operand::Reg(Register::R9),
+];
+
 #[derive(Debug, Clone, Copy)]
 pub enum RegisterWidth {
     W8,  // 8位
-    W16, // 16位
     W32, // 32位
     W64, // 64位
 }
@@ -123,14 +141,17 @@ impl From<tacky::Operator> for Operator {
 #[derive(Debug)]
 pub struct Asmt {
     name_map: HashMap<String, i32>,
-    stack_alloc_size: i32,
+
+    current_function_scope: String,
+    stack_size_map: std::collections::HashMap<String, i32>,
 }
 
 impl Asmt {
     pub fn new() -> Self {
         Asmt {
             name_map: HashMap::new(),
-            stack_alloc_size: 0,
+            current_function_scope: "there is no function name@#$%^&*+".to_string(),
+            stack_size_map: std::collections::HashMap::<String, i32>::new(),
         }
     }
 
@@ -139,16 +160,53 @@ impl Asmt {
             return Operand::Stack(self.name_map.get(identifier).cloned().expect("Error!"));
         }
 
-        self.stack_alloc_size += std::mem::size_of::<i32>() as i32;
-        self.name_map
-            .insert(identifier.to_string(), -self.stack_alloc_size);
-        return Operand::Stack(-self.stack_alloc_size);
+        *self
+            .stack_size_map
+            .get_mut(&self.current_function_scope)
+            .unwrap() += std::mem::size_of::<i32>() as i32;
+        self.name_map.insert(
+            identifier.to_string(),
+            -self
+                .stack_size_map
+                .get(&self.current_function_scope)
+                .unwrap(),
+        );
+        return Operand::Stack(
+            -self
+                .stack_size_map
+                .get(&self.current_function_scope)
+                .unwrap(),
+        );
     }
 
     fn fix_operand(&mut self, op: &Operand) -> Operand {
         match op {
             Operand::Pseudo(ident) => self.pseudo_to_stack(&ident),
             _ => op.clone(),
+        }
+    }
+
+    fn fix_allocate_stack(alloc_stack: Instruction) -> Option<Instruction> {
+
+        if let Instruction::AllocateStack(op) = alloc_stack {
+            match op {
+                Operand::Imm(size) => {
+                    if size == 0 {
+                        return None;
+                    }
+
+                    let mut size = size;
+                    size += 16 - size % 16;
+
+                    return Some(Instruction::AllocateStack(Operand::Imm(size)));
+                }, 
+                _ => {
+                    panic!("");
+                }
+            }
+            
+        } else {
+            panic!("");
         }
     }
 
@@ -255,6 +313,20 @@ impl Asmt {
                     insts.push(Instruction::Mov(Operand::Reg(Register::R11), dst.clone()));
                 }
 
+                // Instruction::AllocateStack(op) => match op {
+                //     Operand::Imm(stack_alloc_size) => {
+                //         let mut stack_alloc_size = stack_alloc_size.clone();
+                //         if stack_alloc_size != 0 {
+                //             stack_alloc_size += 16 - stack_alloc_size % 16;
+                //             insts.push(Instruction::AllocateStack(Operand::Imm(stack_alloc_size)));
+                //         } 
+
+                //     }
+                //     _ => {
+                //         panic!("");
+                //     }
+                // }
+
                 _ => {
                     insts.push(inst);
                 }
@@ -264,9 +336,11 @@ impl Asmt {
         insts
     }
 
-    fn emit_instructions(&mut self, body: &Vec<tacky::Instruction>) -> Vec<Instruction> {
-        let mut instructions = Vec::<Instruction>::new();
-
+    fn emit_instructions(
+        &mut self,
+        body: &Vec<tacky::Instruction>,
+        mut instructions: Vec<Instruction>,
+    ) -> Vec<Instruction> {
         for instruction in body.iter() {
             match instruction {
                 tacky::Instruction::Return(operand) => {
@@ -361,25 +435,122 @@ impl Asmt {
                     instructions.push(Instruction::Label(id.to_string()));
                 }
 
+                tacky::Instruction::FunCall(name, params, dst) => {
+                    let mut register_args = params.clone();
+
+                    let mut stack_args = Vec::<tacky::Operand>::new();
+
+                    if register_args.len() > 6 {
+                        stack_args = register_args.split_off(6 - 1);
+                    }
+
+                    let mut stack_padding = 0;
+                    //如果栈参数个数为奇数，就要padding
+                    if stack_args.len() % 2 == 1 {
+                        stack_padding = 8;
+                    } else {
+                        stack_padding = 0;
+                    }
+
+                    if stack_padding != 0 {
+                        instructions.push(Instruction::AllocateStack(Operand::Imm(stack_padding)));
+                    }
+
+                    let mut reg_idx = 0;
+                    for arg in register_args {
+                        instructions
+                            .push(Instruction::Mov(arg.into(), ARG_REGISTERS[reg_idx].clone()));
+                        reg_idx += 1;
+                    }
+
+                    let stack_args_len = stack_args.len();
+
+                    stack_args.reverse();
+                    for arg in stack_args {
+                        let arg: Operand = arg.into();
+
+                        match arg {
+                            Operand::Imm(..) | Operand::Reg(..) => {
+                                instructions.push(Instruction::Push(arg.clone()));
+                            }
+
+                            _ => {
+                                instructions
+                                    .push(Instruction::Mov(arg, Operand::Reg(Register::AX)));
+                                instructions.push(Instruction::Push(Operand::Reg(Register::AX)));
+                            }
+                        }
+                    }
+
+                    instructions.push(Instruction::Call(name.clone()));
+
+                    //函数调用完就把用来传参和padding的栈给清空了
+                    let bytes_to_removed = 8 * (stack_args_len as i32) + stack_padding;
+                    if bytes_to_removed != 0 {
+                        instructions
+                            .push(Instruction::DeallocateStack(Operand::Imm(bytes_to_removed)));
+                    }
+
+                    instructions.push(Instruction::Mov(
+                        Operand::Reg(Register::AX),
+                        dst.clone().into(),
+                    ));
+                }
+
                 _ => {
                     eprintln!("Unsupported tacky::Instruction: {:?}", instruction);
                     std::process::exit(1);
                 }
             }
         }
-
-        self.fix_illegal_instruction(instructions)
+        return instructions;
     }
 
     fn emit_function(&mut self, function: &tacky::Function) -> Function {
+
         let identifier = function.name.clone();
 
-        let mut instructions = self.emit_instructions(&function.body);
+        self.current_function_scope = identifier.clone();
+
+        self.stack_size_map
+            .insert(self.current_function_scope.clone(), 0);
+
+        let mut instructions = Vec::<Instruction>::new();
+
+        for (i, param) in function.params.iter().enumerate() {
+            if i < ARG_REGISTERS.len() {
+                // 把函数在寄存器上的参数都复制到栈上
+                instructions.push(Instruction::Mov(
+                    ARG_REGISTERS[i].clone(),
+                    Operand::Pseudo(param.clone()),
+                ));
+            } else {
+                // 再把函数在栈上的参数(在调用者栈帧里)都复制到自己的栈帧里
+                // 参数在调用者栈帧, 第7个参数位置为Stack(16), 第8个为Stack(24), ...
+                let stack_offset = 16 + ((i - ARG_REGISTERS.len()) as i32) * 8;
+                instructions.push(Instruction::Mov(
+                    Operand::Stack(stack_offset),
+                    Operand::Pseudo(param.clone()),
+                ));
+            }
+        }
+
+        instructions = self.emit_instructions(&function.body, instructions);
+
+        instructions = self.fix_illegal_instruction(instructions);
+
+        let stack_alloc_size = self
+            .stack_size_map
+            .get(&self.current_function_scope)
+            .unwrap()
+            .clone();
+
 
         instructions.insert(
             0,
-            Instruction::AllocateStack(Operand::Imm(self.stack_alloc_size)),
+            Self::fix_allocate_stack(Instruction::AllocateStack(Operand::Imm(stack_alloc_size))).unwrap(),
         );
+
 
         Function {
             identifier: identifier,
@@ -388,8 +559,13 @@ impl Asmt {
     }
 
     pub fn emit_program(&mut self, program: &tacky::Program) -> Program {
-        Program {
-            function_definition: self.emit_function(&program.function_def),
+        let mut func_defs = Vec::<Function>::new();
+        for func_def in &program.functions {
+            func_defs.push(self.emit_function(func_def));
         }
+
+        return Program {
+            function_definitions: func_defs,
+        };
     }
 }

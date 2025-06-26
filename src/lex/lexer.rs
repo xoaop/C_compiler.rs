@@ -33,6 +33,7 @@ fn get_regex_map() -> Vec<(&'static str, TokenType)> {
         (r"^;", TokenType::Semicolon),
         (r"^\?", TokenType::QuestionMark),
         (r"^:", TokenType::Colon),
+        (r"^,", TokenType::Comma),
         (r"^if\b", TokenType::KeywordIf),
         (r"^else\b", TokenType::KeywordElse),
         (r"^int\b", TokenType::KeywordInt),

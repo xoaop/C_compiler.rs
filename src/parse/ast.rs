@@ -1,12 +1,14 @@
+
+
 #[derive(Debug, Clone)]
 pub enum AstNode {
     Program {
-        function_definition: Box<AstNode>,
+        function_decl: Vec<AstNode>,
     },
-    Function {
-        name: Box<AstNode>,             // 函数名（identifier）
-        block: Box<AstNode>, // 函数体（statement）
-    },
+    // Function {
+    //     name: Box<AstNode>,             // 函数名（identifier）
+    //     block: Box<AstNode>, // 函数体（statement）
+    // },
 
     //statement:
     Return {
@@ -54,7 +56,13 @@ pub enum AstNode {
         init: Box<AstNode>,
     },
 
-    Identifier(String),
+    FunctionDecl {
+        name: String, 
+        params: Vec<String>,
+        body: Box<AstNode>, // optional
+    },
+
+    // Identifier(String),
 
     //exp:
     Constant {
@@ -76,6 +84,11 @@ pub enum AstNode {
         condition: Box<AstNode>,
         if_exp: Box<AstNode>,
         else_exp: Box<AstNode>,
+    },
+
+    FunctionCall {
+        identifier: String, 
+        args: Vec<AstNode>,
     },
 
     //binary operators:

@@ -7,6 +7,7 @@ pub enum TokenType {
     LcurlyBracket,      //Left Curly Bracket {
     RcurlyBracket,      //Right Curly Bracket }
     Semicolon,          //Semicolon ;
+    Comma, //逗号 ,
 
     KeywordInt,
     KeywordVoid,
@@ -95,9 +96,9 @@ impl TokenList {
         self.tokens.push(token);
     }
 
-    pub fn iter(&self) -> std::slice::Iter<Token> {
-        return self.tokens.iter();
-    }
+    // pub fn iter(&self) -> std::slice::Iter<Token> {
+    //     return self.tokens.iter();
+    // }
 
     pub fn next_token(&mut self) -> Option<&Token> {
         if self.index < self.tokens.len() {
@@ -107,22 +108,22 @@ impl TokenList {
         }
 
         panic!("Tokenlist is at the end!");
-        return None;
+        // return None;
     }
 
     pub fn current_token(&self) -> Option<&Token> {
         self.tokens.get(self.index)
     }
 
-    pub fn forward(&mut self) {
-        self.index += 1;
-    }
+    // pub fn forward(&mut self) {
+    //     self.index += 1;
+    // }
 
     pub fn back(&mut self) {
         self.index -= 1;
     }
 
-    pub fn reset(&mut self) {
-        self.index = 0;
-    }
+    // pub fn reset(&mut self) {
+    //     self.index = 0;
+    // }
 }

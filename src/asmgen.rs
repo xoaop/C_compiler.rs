@@ -1,38 +1,49 @@
 use crate::asmt;
-use std::fs::File;
+use std::{fs::File};
 use std::io::Write;
 
 // Bring required types into scope
-use crate::asmt::{Instruction, Operator, Operand, Register, RegisterWidth, CondCode};
+use crate::asmt::{CondCode, Instruction, Operand, Operator, Register, RegisterWidth};
 
 use std::fmt;
-
 
 impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Instruction::Mov(src, dst) => write!(f, "movl\t{}, {}", src, dst),
+
             Instruction::Ret => write!(f, "movq\t%rbp, %rsp\n\tpopq\t%rbp\n\tret"),
+
             Instruction::Unray(unray_op, operand) => write!(f, "{}\t{}", unray_op, operand),
+
             Instruction::AllocateStack(size) => write!(f, "subq\t{}, %rsp", size),
+
             Instruction::Binary(op, src, dst) => write!(f, "{}\t{}, {}", op, src, dst),
+
             Instruction::Idiv(operand) => write!(f, "idivl\t{}", operand),
+
             Instruction::Cdq => write!(f, "cdq"),
+
             Instruction::Cmp(src, dst) => write!(f, "cmpl\t{}, {}", src, dst),
+
             Instruction::Jmp(label) => write!(f, "jmp\t.L{}", label),
+
             Instruction::JmpCC(cond_code, label) => write!(f, "j{}\t.L{}", cond_code, label),
-            Instruction::SetCC(cond_code, operand) => {
-                match operand {
-                    Operand::Reg(reg) => {
-                        write!(f, "set{}\t", cond_code)?;
-                        reg.fmt_with_width(RegisterWidth::W8, f)
-                    },
-                    _ => write!(f, "set{}\t{}", cond_code, operand),
-                }
-            },
+
+            Instruction::SetCC(cond_code, operand) => write!(f, "set{}\t{}", cond_code, operand.fmt_with_width(RegisterWidth::W8)),
+            
             Instruction::Label(label) => write!(f, ".L{}:", label),
-            _ => {
-                std::process::exit(1);
+
+            Instruction::DeallocateStack(op) => {
+                write!(f, "addq\t{}, %rsp", op)
+            }
+
+            Instruction::Push(op) => {
+                write!(f, "pushq\t{}", op.fmt_with_width(RegisterWidth::W64))
+            }
+
+            Instruction::Call(name) => {
+                write!(f, "call\t{}", name)
             }
         }
     }
@@ -48,7 +59,7 @@ impl fmt::Display for Operator {
             Operator::Mul => write!(f, "imull"),
 
             _ => {
-                std::process::exit(1);
+                panic!("");
             }
         }
     }
@@ -62,43 +73,88 @@ impl fmt::Display for Operand {
             Operand::Stack(offset) => write!(f, "{}(%rbp)", offset),
 
             _ => {
-                std::process::exit(1);
+                panic!("");
+            }
+        }
+    }
+}
+
+impl Operand {
+    fn fmt_with_width(&self, width: RegisterWidth) -> String {
+        match self {
+            Operand::Imm(i32) => format!("${}", i32),
+            Operand::Reg(reg) => format!("{}", reg.fmt_with_width(Some(width))),
+            Operand::Stack(offset) => format!("{}(%rbp)", offset),
+
+            _ => {
+                panic!("");
             }
         }
     }
 }
 
 impl fmt::Display for Register {
+
+    //生成所有寄存器各自名字的基底base
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Register::AX => write!(f, "%eax"),
+            Register::CX => write!(f, "%ecx"),
             Register::DX => write!(f, "%edx"),
+            Register::SI => write!(f, "%esi"),
+            Register::DI => write!(f, "%edi"),
+            Register::R8 => write!(f, "%r8d"),
+            Register::R9 => write!(f, "%r9d"),
             Register::R10 => write!(f, "%r10d"),
             Register::R11 => write!(f, "%r11d"),
-            _ => {
-                std::process::exit(1);
-            }
         }
     }
 }
 
 impl Register {
-    pub fn fmt_with_width(&self, width: RegisterWidth, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match (self, width) {
-            (Register::AX, RegisterWidth::W8) => write!(f, "%al"),
-            (Register::AX, RegisterWidth::W16) => write!(f, "%ax"),
-            (Register::AX, RegisterWidth::W32) => write!(f, "%eax"),
-            (Register::AX, RegisterWidth::W64) => write!(f, "%rax"),
-            (Register::DX, RegisterWidth::W8) => write!(f, "%dl"),
-            (Register::DX, RegisterWidth::W16) => write!(f, "%dx"),
-            (Register::DX, RegisterWidth::W32) => write!(f, "%edx"),
-            (Register::DX, RegisterWidth::W64) => write!(f, "%rdx"),
-            (Register::R10, RegisterWidth::W32) => write!(f, "%r10b"),
-            (Register::R10, RegisterWidth::W8) => write!(f, "%r10d"),
-            (Register::R11, RegisterWidth::W32) => write!(f, "%r11d"),
-            (Register::R11, RegisterWidth::W8) => write!(f, "%r11b"),
-            _ => std::process::exit(1),
+
+    fn get_base(&self) -> String {
+        match self {
+            Register::AX => format!("%a"),
+            Register::CX => format!("%c"),
+            Register::DX => format!("%d"),
+            Register::SI => format!("%si"),
+            Register::DI => format!("%di"),
+            Register::R8 => format!("%r8"),
+            Register::R9 => format!("%r9"),
+            Register::R10 => format!("%r10"),
+            Register::R11 => format!("%r11"),
         }
+    }
+
+    //基于基底base和字长来生成完整的寄存器名字
+    pub fn fmt_with_width(&self, mut width: Option<RegisterWidth>) -> String {
+ 
+        if width.is_none() {
+            width = Some(RegisterWidth::W32);
+        }
+        let width = width.unwrap();
+
+        let base = self.get_base();
+        let reg_str = match self {
+            Register::AX | Register::CX | Register::DX | Register::DI | Register::SI => {
+                match width {
+                    RegisterWidth::W8 => format!("{}l", base),
+                    RegisterWidth::W32 => format!("e{}x", base),
+                    RegisterWidth::W64 => format!("r{}x", base),
+                }
+            }
+
+            Register::R8 | Register::R9 | Register::R10 | Register::R11 => {
+                match width {
+                    RegisterWidth::W8 => format!("{}b", base),
+                    RegisterWidth::W32 => format!("{}d", base),
+                    RegisterWidth::W64 => format!("{}", base),
+                }
+            }
+        };
+
+        format!("{}", reg_str)
     }
 }
 
@@ -118,11 +174,15 @@ impl fmt::Display for CondCode {
     }
 }
 
-
-
-
-pub fn generate_assembly(assembly_ast: &asmt::Program) {
-    let file_path = "output.s";
+pub fn emit_asm(assembly_ast: &asmt::Program, path: &String) {
+    let file_path = if let Some(idx) = path.rfind('.') {
+        let mut new_path = path.clone();
+        new_path.replace_range(idx.., ".S");
+        new_path
+    } else {
+        format!("{}.S", path)
+    };
+    
     let mut file = match File::create(file_path) {
         Ok(f) => f,
         Err(e) => {
@@ -141,9 +201,15 @@ pub fn generate_assembly(assembly_ast: &asmt::Program) {
 fn generate_at_program(program: &asmt::Program) -> String {
     let mut result = String::new();
 
-    result.push_str(&generate_at_function(&program.function_definition));
+    for function_def in program.function_definitions.iter() {
+        result.push_str(&generate_at_function(&function_def));
+    }
 
-    result.push_str(".section .note.GNU-stack,\"\",@progbits\n");
+    
+    //NOTE: 在windows不需要
+    if cfg!(target_os = "linux") {
+        result.push_str(".section .note.GNU-stack,\"\",@progbits\n");
+    }
 
     return result;
 }
