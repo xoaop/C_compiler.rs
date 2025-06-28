@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{global, symbol, tacky};
+use crate::{symbol, tacky};
 
 #[derive(Debug)]
 pub struct Program {
@@ -179,8 +179,10 @@ impl<'global> Asmt<'global> {
             return Operand::Stack(self.name_map.get(identifier).cloned().expect("Error!"));
         }
 
-        if self.symbol_table.contains_key(identifier) {
-            return Operand::Data(identifier.to_string());
+        if let Some(symbol_info) = self.symbol_table.get(identifier) {
+            if let symbol::IdentifierAttrs::StaticAttr { .. } = &symbol_info.attrs {
+                return Operand::Data(identifier.to_string());
+            }
         }
 
         *self
@@ -258,7 +260,7 @@ impl<'global> Asmt<'global> {
 
                     match op {
                         Operator::Add | Operator::Sub => {
-                            if matches!(src, Operand::Stack(_)) {
+                            if matches!(src, Operand::Stack(_)) || matches!(src, Operand::Data(_)) {
                                 insts.push(Instruction::Mov(
                                     src.clone(),
                                     Operand::Reg(Register::R10),
@@ -273,7 +275,7 @@ impl<'global> Asmt<'global> {
                             }
                         }
                         Operator::Mul => {
-                            if matches!(dst, Operand::Stack(_)) {
+                            if matches!(dst, Operand::Stack(_)) || matches!(dst, Operand::Data(_)) {
                                 insts.push(Instruction::Mov(
                                     dst.clone(),
                                     Operand::Reg(Register::R11),
@@ -303,7 +305,7 @@ impl<'global> Asmt<'global> {
                     let mut new_src = src.clone();
                     let mut new_dst = dst.clone();
 
-                    if matches!(new_src, Operand::Stack(_)) {
+                    if matches!(new_src, Operand::Stack(_)) || matches!(new_src, Operand::Data(_)) {
                         insts.push(Instruction::Mov(
                             new_src.clone(),
                             Operand::Reg(Register::R10),
@@ -322,7 +324,7 @@ impl<'global> Asmt<'global> {
                     let dst = self.fix_operand(dst);
 
                     let mut new_dst = dst.clone();
-                    if matches!(dst, Operand::Stack(_)) {
+                    if matches!(dst, Operand::Stack(_)) || matches!(dst, Operand::Data(_)) {
                         insts.push(Instruction::Mov(
                             new_dst.clone(),
                             Operand::Reg(Register::R11),

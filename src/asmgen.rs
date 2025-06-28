@@ -206,14 +206,16 @@ fn generate_at_program(program: &asmt::Program) -> String {
             asmt::TopLevel::Function(function_def) => {
                 result.push_str(&generate_at_function(function_def));
             }
-            asmt::TopLevel::StaticVariable(static_var) => {}
+            asmt::TopLevel::StaticVariable(static_var) => {
+                result.push_str(&generate_at_static_var(static_var));
+            }
         }
     }
 
     //NOTE: 在windows不需要
-    if cfg!(target_os = "linux") {
-        result.push_str(".section .note.GNU-stack,\"\",@progbits\n");
-    }
+    // if cfg!(target_os = "linux") {
+        result.push_str("\n.section .note.GNU-stack,\"\",@progbits\n");
+    // }
 
     return result;
 }
@@ -222,13 +224,13 @@ fn generate_at_static_var(static_var: &asmt::StaticVariable) -> String {
     let mut result = String::new();
 
     if static_var.global == true {
-        result.push_str(format!("\n\t.globl {}", static_var.name).as_str());
+        result.push_str(format!("\n.globl {}", static_var.name).as_str());
     }
 
     if static_var.init != 0 {
-        result.push_str(format!("\n\t.data\n\t.align 4\n{}:\n\t.long {}", static_var.name, static_var.init).as_str());
+        result.push_str(format!("\n.data\n.align 4\n{}:\n.long {}", static_var.name, static_var.init).as_str());
     } else {
-        result.push_str(format!("\n\t.bss\n\t.align 4\n{}:\n\t.zero 4", static_var.name).as_str());
+        result.push_str(format!("\n.bss\n.align 4\n{}:\n.zero 4", static_var.name).as_str());
     }
 
     return result;
