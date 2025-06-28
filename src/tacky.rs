@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::fmt::write;
 
 use crate::global::VariableContext;
 use crate::parse::ast;
+use crate::symbol;
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
@@ -49,7 +49,7 @@ pub enum Operand {
 
 #[derive(Debug)]
 pub struct Program {
-    pub functions: Vec<Function>,
+    pub top_levels: Vec<TopLevel>,
 }
 
 #[derive(Debug)]
@@ -57,6 +57,20 @@ pub struct Function {
     pub name: String,
     pub params: Vec<String>,
     pub body: Vec<Instruction>,
+    pub global: bool,
+}
+
+#[derive(Debug)]
+pub struct StaticVariable {
+    pub name: String, 
+    pub global: bool, 
+    pub init: i32,
+}
+
+#[derive(Debug)]
+pub enum TopLevel {
+    StaticVariable(StaticVariable),
+    Function(Function),
 }
 
 //TODO: 重构LabelPrefix
@@ -105,39 +119,81 @@ fn convert_loop_label(statement: &ast::AstNode) -> String {
     }
 }
 
-pub struct Tackilizer<'variable_context> {
-    variable_context: &'variable_context mut VariableContext,
+pub struct Tackilizer<'global> {
+    pub variable_context: &'global mut VariableContext,
+    pub symbol_table: &'global mut HashMap<String, symbol::SymbolInfo>,
 }
 
-impl<'variable_context> Tackilizer<'variable_context> {
-    pub fn new(variable_context: &'variable_context mut VariableContext) -> Self {
-        Tackilizer { variable_context }
+impl<'global> Tackilizer<'global> {
+    pub fn new(variable_context: &'global mut VariableContext, symbol_table: &'global mut HashMap<String, symbol::SymbolInfo>,) -> Self {
+        Tackilizer { variable_context, symbol_table}
     }
 
     pub fn emit_program(&mut self, p: &ast::AstNode) -> Program {
-        match p {
-            ast::AstNode::Program { function_decl } => {
-                let mut funcs = Vec::<Function>::new();
 
-                for func in function_decl {
-                    let function = self.emit_function(func);
+        let ast::AstNode::Program { declarations } = p else { panic!("Expected Program node") };
+
+        let mut top_levels = Vec::<TopLevel>::new();
+
+        for top_level in declarations {
+
+            match top_level {
+                ast::AstNode::FunctionDecl { .. } => {
+                    let function = self.emit_function(top_level);
                     if function.body.len() != 0 {
-                        funcs.push(function);
+                        top_levels.push(TopLevel::Function(function));
                     }
                 }
-
-                return Program { functions: funcs };
+                ast::AstNode::Declaration { .. } => {
+                    
+                }, 
+                _ => {
+                    panic!("");
+                }
             }
 
-            _ => {
-                panic!("");
+        }
+
+        let tacky_defs = self.convert_symbols_to_tacky();
+        let mut static_var_vec = Vec::<TopLevel>::new();
+        for static_var in tacky_defs {
+            static_var_vec.push(TopLevel::StaticVariable(static_var));
+        }
+        top_levels.extend(static_var_vec);
+
+
+        return Program { top_levels: top_levels };
+    }
+
+
+    fn convert_symbols_to_tacky(&self) -> Vec<StaticVariable> {
+        let mut tacky_defs = Vec::<StaticVariable>::new();
+
+       for (name, symbol_info) in self.symbol_table.iter() {
+        match &symbol_info.attrs {
+            symbol::IdentifierAttrs::StaticAttr { init, global } => {
+                match init {
+                    symbol::InitialValue::Initial( init_val ) => {
+                        tacky_defs.push(StaticVariable { name: name.clone(), global: global.clone(), init: init_val.clone() });
+                    }, 
+
+                    symbol::InitialValue::Tentative => {
+                        tacky_defs.push(StaticVariable { name: name.clone(), global: global.clone(), init: 0 });
+                    }
+
+                    symbol::InitialValue::NoInitializer => continue
+                }
+            }
+            _ => continue
             }
         }
+
+        return tacky_defs;
     }
 
     fn emit_function(&mut self, f: &ast::AstNode) -> Function {
         match f {
-            ast::AstNode::FunctionDecl { name, params, body } => {
+            ast::AstNode::FunctionDecl { name, params, body , storage_class} => {
                 let name = name.clone();
 
                 let mut instructions = Vec::<Instruction>::new();
@@ -152,6 +208,7 @@ impl<'variable_context> Tackilizer<'variable_context> {
                     name: name,
                     params: params.clone(),
                     body: instructions,
+                    global: false,
                 }
             }
             _ => {
@@ -270,7 +327,7 @@ impl<'variable_context> Tackilizer<'variable_context> {
                 return var;
             }
 
-            ast::AstNode::Declaration { name, init } => {
+            ast::AstNode::Declaration { name, init , storage_class} => {
                 if matches!(init.as_ref(), ast::AstNode::NULL) {
                     return Operand::Nothing;
                 }

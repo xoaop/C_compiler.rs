@@ -1,34 +1,30 @@
 use crate::global::VariableContext;
 use crate::lex::token::{Token, TokenList, TokenType};
-use crate::parse::ast;
+use crate::parse::ast::{self, AstNode};
+use crate::symbol;
 
 use core::panic;
 use std::collections::HashMap;
 use std::mem;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MapEntry {
     unique_name: String,
     from_current_scope: bool,
     has_linkage: bool,
 }
 
-pub enum Type {
-    Int,
-    FunType { param_count: i32, defined: bool },
-}
-
-pub struct Parser<'variable_context> {
+pub struct Parser<'global> {
     token_list: TokenList,
-    pub variable_context: &'variable_context mut VariableContext,
-    pub symbol_table: &'variable_context mut HashMap<String, Type>,
+    pub variable_context: &'global mut VariableContext,
+    pub symbol_table: &'global mut HashMap<String, symbol::SymbolInfo>,
 }
 
-impl<'variable_context> Parser<'variable_context> {
+impl<'global> Parser<'global> {
     pub fn new(
         token_list: TokenList,
-        variable_context: &'variable_context mut VariableContext,
-        symbol_table: &'variable_context mut HashMap<String, Type>,
+        variable_context: &'global mut VariableContext,
+        symbol_table: &'global mut HashMap<String, symbol::SymbolInfo>,
     ) -> Self {
         Parser {
             token_list,
@@ -236,8 +232,8 @@ impl<'variable_context> Parser<'variable_context> {
 
             _ => {
                 panic!(
-                    "Unexpected token: {}:{:?} ",
-                    next_token.index, next_token.token_type
+                    "Unexpected token: {}::{} :{:?} ",
+                    next_token.line_index, next_token.column_index, next_token.token_type
                 );
             }
         }
@@ -381,11 +377,16 @@ impl<'variable_context> Parser<'variable_context> {
                 return self.parse_compound();
             }
 
+            TokenType::KeywordInt | TokenType::KeywordExtern | TokenType::KeywordStatic => {
+                return self.parse_declaration();
+            }
+
             TokenType::Semicolon => {
                 self.expect(&TokenType::Semicolon);
 
                 return ast::AstNode::NULL;
             }
+
             _ => {
                 let exp = ast::AstNode::Expression {
                     exp: Box::new(self.parse_exp(0)),
@@ -396,8 +397,54 @@ impl<'variable_context> Parser<'variable_context> {
         }
     }
 
+    fn parse_type_and_storage_class(&mut self) -> (ast::AstNode, ast::AstNode) {
+        let mut types = Vec::<AstNode>::new();
+        let mut storage_classes = Vec::<AstNode>::new();
+
+        loop {
+            let token_type = &self.token_list.current_token().unwrap().token_type;
+            match token_type {
+                TokenType::KeywordInt => {
+                    //TODO: 加入对不同类型的解析
+                    self.expect(&TokenType::KeywordInt);
+                    types.push(ast::AstNode::TypeInt);
+                }
+
+                TokenType::KeywordStatic => {
+                    self.expect(&TokenType::KeywordStatic);
+                    storage_classes.push(ast::AstNode::Static);
+                }
+
+                TokenType::KeywordExtern => {
+                    self.expect(&TokenType::KeywordExtern);
+                    storage_classes.push(ast::AstNode::Extern);
+                }
+
+                _ => {
+                    break;
+                }
+            }
+        }
+
+        if types.len() != 1 {
+            panic!("类型声明错误：有且得只有一个类型说明符: {:#?}", types);
+        }
+        if storage_classes.len() > 1 {
+            panic!("存储类说明符只能有一个");
+        }
+
+        let __type = ast::AstNode::TypeInt;
+        let mut storage_class = ast::AstNode::NULL;
+
+        if storage_classes.len() == 1 {
+            storage_class = storage_classes.pop().unwrap();
+        }
+
+        return (__type, storage_class);
+    }
+
     fn parse_declaration(&mut self) -> ast::AstNode {
-        self.expect(&TokenType::KeywordInt);
+        let (__type, storage_class) = self.parse_type_and_storage_class();
 
         let ident = self
             .expect(&TokenType::Identifier("".to_string()))
@@ -418,12 +465,18 @@ impl<'variable_context> Parser<'variable_context> {
         ) {
             let params = self.parse_params();
 
-            self.expect(&TokenType::Semicolon);
+            let mut body = ast::AstNode::NULL;
+            if self.token_list.current_token().unwrap().token_type == TokenType::LcurlyBracket {
+                body = self.parse_compound();
+            } else {
+                self.expect(&TokenType::Semicolon);
+            }
 
             return ast::AstNode::FunctionDecl {
                 name: ident,
                 params: params,
-                body: Box::new(ast::AstNode::NULL),
+                body: Box::new(body),
+                storage_class: Box::new(storage_class),
             };
         }
 
@@ -442,15 +495,14 @@ impl<'variable_context> Parser<'variable_context> {
         return ast::AstNode::Declaration {
             name: ident,
             init: Box::new(exp),
+            storage_class: Box::new(storage_class),
         };
     }
 
     fn parse_block_item(&mut self) -> ast::AstNode {
         let current_token = self.token_list.current_token().unwrap();
         match current_token.token_type {
-            //TODO: 添加对局部函数声明的解析
             TokenType::KeywordInt => self.parse_declaration(),
-
             _ => self.parse_statement(),
         }
     }
@@ -502,10 +554,9 @@ impl<'variable_context> Parser<'variable_context> {
             if let TokenType::Identifier(ident) =
                 self.token_list.current_token().unwrap().token_type.clone()
             {
+                self.expect(&TokenType::Identifier("".to_string()));
                 params.push(ident);
             }
-
-            self.expect(&TokenType::Identifier("".to_string()));
 
             if !matches!(
                 self.token_list.current_token().unwrap().token_type,
@@ -521,47 +572,19 @@ impl<'variable_context> Parser<'variable_context> {
         return params;
     }
 
-    fn parse_function_decl(&mut self) -> ast::AstNode {
-        self.expect(&TokenType::KeywordInt);
-        let identifier_token = self.expect(&TokenType::Identifier("".to_string()));
-        let identifier = match &identifier_token.token_type {
-            TokenType::Identifier(name) => name.clone(),
-            _ => std::process::exit(1),
-        };
-
-        let params = self.parse_params();
-
-        let mut compound = ast::AstNode::NULL;
-
-        if !matches!(
-            self.token_list.current_token().unwrap().token_type,
-            TokenType::Semicolon
-        ) {
-            compound = self.parse_compound();
-        } else {
-            self.expect(&TokenType::Semicolon);
-        }
-
-        return ast::AstNode::FunctionDecl {
-            name: identifier,
-            params: params,
-            body: Box::new(compound),
-        };
-    }
-
     fn parse_program(&mut self) -> ast::AstNode {
-        let mut funcs = Vec::<ast::AstNode>::new();
+        let mut decls = Vec::<ast::AstNode>::new();
 
         let mut identifier_map = HashMap::<String, MapEntry>::new();
 
         while self.token_list.current_token().is_some() {
-            let func = self.parse_function_decl();
-            let func = self.resolve_function_declaration(func, &mut identifier_map);
-            funcs.push(func);
+            let decl = self.parse_declaration();
+            let decl = self.resolve_decl(&decl, &mut identifier_map);
+            decls.push(decl);
         }
 
         return ast::AstNode::Program {
-            function_decl: funcs,
+            declarations: decls,
         };
     }
 
@@ -569,65 +592,193 @@ impl<'variable_context> Parser<'variable_context> {
     //   Resolve Part is Below
     // =======================
 
-    fn resolve_function_declaration(
+    fn resolve_decl(
         &mut self,
-        decl: ast::AstNode,
+        decl: &ast::AstNode,
         identifier_map: &mut HashMap<String, MapEntry>,
     ) -> ast::AstNode {
         match decl {
-            ast::AstNode::FunctionDecl { name, params, body } => {
-                if identifier_map.contains_key(&name) {
-                    let prev_entry = identifier_map.get(&name).unwrap();
+            ast::AstNode::Declaration { .. } => {
+                self.resolve_file_scope_var_decl(decl, identifier_map)
+            }
 
-                    if prev_entry.from_current_scope && !prev_entry.has_linkage {
-                        panic!(
-                            "符号 '{}' 在当前作用域已被声明，且未具有链接属性，说明当前作用域已经有同名变量，不能再被当作函数声明",
-                            name
-                        );
-                    }
-                }
+            ast::AstNode::FunctionDecl { .. } => {
 
-                identifier_map.insert(
-                    name.clone(),
-                    MapEntry {
-                        unique_name: name.clone(),
-                        from_current_scope: true,
-                        has_linkage: true,
-                    },
-                );
-
-                let mut inner_map = identifier_map.clone();
-
-                //TODO: FIX, 如果没有定义(body为null), 不需要记录参数名? 不确定
-
-                let mut new_params = Vec::<String>::new();
-                let mut new_body = ast::AstNode::NULL;
-
-                if !matches!(*body, ast::AstNode::NULL) {
-                    // *有待检查
-                    for param in params {
-                        new_params.push(self.resolve_param(param, &mut inner_map));
-                    }
-                    new_body = self.resolve_compound(*body, None, &mut inner_map);
-                } else {
-                    new_params = params;
-                }
-
-                let decl = ast::AstNode::FunctionDecl {
-                    name: name.clone(),
-                    params: new_params,
-                    body: Box::new(new_body),
-                };
-
-                self.type_check_func_decl(&decl);
-
-                return decl;
+                self.resolve_function_declaration(decl, identifier_map)
             }
 
             _ => {
                 panic!("");
             }
         }
+    }
+
+    fn resolve_file_scope_var_decl(
+        &mut self,
+        var_decl: &ast::AstNode,
+        identifier_map: &mut HashMap<String, MapEntry>,
+    ) -> ast::AstNode {
+        let ast::AstNode::Declaration { name, .. } = var_decl else {
+            panic!("")
+        };
+
+        identifier_map.insert(
+            name.clone(),
+            MapEntry {
+                unique_name: name.clone(),
+                from_current_scope: true,
+                has_linkage: true,
+            },
+        );
+
+        self.type_check_file_scope_var_decl(var_decl);
+
+        return var_decl.clone();
+    }
+
+    fn resolve_local_var_decl(
+        &mut self,
+        var_decl: &ast::AstNode,
+        identifier_map: &mut HashMap<String, MapEntry>,
+    ) -> ast::AstNode {
+        let new_val_decl = match var_decl {
+            ast::AstNode::Declaration {
+                name,
+                init,
+                storage_class,
+            } => {
+                //处理同名冲突
+                if identifier_map.contains_key(name) {
+                    let prev_entry = identifier_map.get(name).unwrap();
+
+                    if prev_entry.from_current_scope {
+                        if !(prev_entry.has_linkage
+                            && matches!(storage_class.as_ref(), ast::AstNode::Extern))
+                        {
+                            panic!(
+                                "要么局部变量重复声明，要么局部变量和同一作用域先前extern过的外部全局变量名字重复了: {:?}, {:?}",
+                                prev_entry, var_decl
+                            );
+                        }
+                    }
+                }
+                //若是extern， 如 extern type var_outside
+                //has_linkage就为true
+                //has_linkage为true意味着就是援引外部的东西，与外部东西“链接link”了
+                //这会把文件域的的可能的同名static覆盖了，好像它是global的，但实际也没区别
+                let mut u_name = name.clone();
+                if matches!(storage_class.as_ref(), ast::AstNode::Extern) {
+                    identifier_map.insert(
+                        name.clone(),
+                        MapEntry {
+                            unique_name: name.clone(),
+                            from_current_scope: true,
+                            has_linkage: true,
+                        },
+                    );
+                } else if storage_class.as_ref() == &ast::AstNode::Static {
+                    identifier_map.insert(
+                        name.clone(),
+                        MapEntry {
+                            unique_name: name.clone(),
+                            from_current_scope: true,
+                            has_linkage: false,
+                        },
+                    );
+                } else {
+                    //这是新声明的局部变量
+                    u_name = self.variable_context.make_temporary(Some(u_name.clone()));
+
+                    // println!("{:?}", u_name);
+                    identifier_map.insert(
+                        name.clone(),
+                        MapEntry {
+                            unique_name: u_name.clone(),
+                            from_current_scope: true,
+                            has_linkage: false,
+                        },
+                    );
+                }
+
+                ast::AstNode::Declaration {
+                    name: u_name,
+                    init: init.clone(),
+                    storage_class: storage_class.clone(),
+                }
+            }
+            _ => {
+                panic!("");
+            }
+        };
+
+        self.type_check_local_var_decl(&new_val_decl);
+
+        return new_val_decl;
+    }
+
+    fn resolve_function_declaration(
+        &mut self,
+        decl: &ast::AstNode,
+        identifier_map: &mut HashMap<String, MapEntry>,
+    ) -> ast::AstNode {
+        let ast::AstNode::FunctionDecl {
+            name,
+            params,
+            body,
+            storage_class,
+        } = decl
+        else {
+            panic!("")
+        };
+
+        if identifier_map.contains_key(name) {
+            let prev_entry = identifier_map.get(name).unwrap();
+
+            if prev_entry.from_current_scope && !prev_entry.has_linkage {
+                panic!(
+                    "符号 '{}' 在当前作用域已被声明，且未具有链接属性，说明当前作用域已经有同名变量，不能再被当作函数声明",
+                    name
+                );
+            }
+        }
+
+        identifier_map.insert(
+            name.clone(),
+            MapEntry {
+                unique_name: name.clone(),
+                from_current_scope: true,
+                has_linkage: true,
+            },
+        );
+
+        let mut inner_map = identifier_map.clone();
+
+        false_current_scope(&mut inner_map);
+
+        let mut new_params = Vec::<String>::new();
+        let mut new_body = ast::AstNode::NULL;
+
+        //TODO: FIX, 如果没有定义(body为null), 不需要记录参数名? 不确定
+        if !matches!(body.as_ref(), &ast::AstNode::NULL) {
+            // *有待检查
+            for param in params {
+                new_params.push(self.resolve_param(param.clone(), &mut inner_map));
+            }
+            new_body = self.resolve_compound(body, None, &mut inner_map);
+        } else {
+            new_params = params.clone();
+        }
+
+        let decl = ast::AstNode::FunctionDecl {
+            name: name.clone(),
+            params: new_params,
+            body: Box::new(new_body),
+            storage_class: storage_class.clone(),
+        };
+
+        self.type_check_func_decl(&decl);
+
+        return decl;
     }
 
     fn resolve_param(
@@ -656,15 +807,20 @@ impl<'variable_context> Parser<'variable_context> {
 
     fn resolve_block_item(
         &mut self,
-        block_item: ast::AstNode,
+        block_item: &ast::AstNode,
         current_loop_id: Option<i32>,
         identifier_map: &mut HashMap<String, MapEntry>,
     ) -> ast::AstNode {
         let resolved = match block_item {
             ast::AstNode::Declaration { .. } => {
-                self.resolve_declaration(&block_item, identifier_map)
+                self.resolve_local_var_decl(block_item, identifier_map)
             }
-            ast::AstNode::FunctionDecl { .. } => {
+            ast::AstNode::FunctionDecl { storage_class, .. } => {
+                //BAD, SHIT_MOUNT_CODE
+                if storage_class.as_ref() == &ast::AstNode::Static {
+                    panic!("块内函数声明不能带static: {:?}", block_item);
+                }
+
                 self.resolve_function_declaration(block_item, identifier_map)
             }
             _ => self.resolve_statement(&block_item, current_loop_id, identifier_map),
@@ -675,7 +831,7 @@ impl<'variable_context> Parser<'variable_context> {
 
     pub fn resolve_block(
         &mut self,
-        block_items: Vec<ast::AstNode>,
+        block_items: &Vec<ast::AstNode>,
         current_loop_id: Option<i32>,
         identifier_map: &mut HashMap<String, MapEntry>,
     ) -> Vec<ast::AstNode> {
@@ -691,7 +847,7 @@ impl<'variable_context> Parser<'variable_context> {
 
     fn resolve_compound(
         &mut self,
-        compound: ast::AstNode,
+        compound: &ast::AstNode,
         current_loop_id: Option<i32>,
         identifier_map: &mut HashMap<String, MapEntry>,
     ) -> ast::AstNode {
@@ -701,45 +857,6 @@ impl<'variable_context> Parser<'variable_context> {
             };
         } else {
             panic!("");
-        }
-    }
-
-    fn resolve_declaration(
-        &mut self,
-        declaration: &ast::AstNode,
-        identifier_map: &mut HashMap<String, MapEntry>,
-    ) -> ast::AstNode {
-        if let ast::AstNode::Declaration { name, init } = declaration {
-            if identifier_map.contains_key(name)
-                && identifier_map.get(name).unwrap().from_current_scope == true
-            {
-                panic!("Duplicate variable declaration!");
-            }
-
-            let unique_name = self.variable_context.make_temporary(Some(name.clone()));
-            identifier_map.insert(
-                name.clone(),
-                MapEntry {
-                    unique_name: unique_name.clone(),
-                    from_current_scope: true,
-                    has_linkage: false,
-                },
-            );
-
-            let resolved_init = if !matches!(init.as_ref(), ast::AstNode::NULL) {
-                self.resolve_exp(init.as_ref(), identifier_map)
-            } else {
-                *init.clone()
-            };
-
-            ast::AstNode::Declaration {
-                name: unique_name,
-                init: Box::new(resolved_init),
-            }
-        } else if let ast::AstNode::FunctionDecl { .. } = declaration {
-            return self.resolve_function_declaration(declaration.clone(), identifier_map);
-        } else {
-            panic!("Expected declaration!");
         }
     }
 
@@ -780,18 +897,10 @@ impl<'variable_context> Parser<'variable_context> {
 
             ast::AstNode::Compound { block } => {
                 let mut identifier_map_copy = identifier_map.clone();
+                false_current_scope(&mut identifier_map_copy);
 
-                for map_entry in identifier_map_copy.values_mut() {
-                    if map_entry.from_current_scope == true {
-                        map_entry.from_current_scope = false;
-                    }
-                }
                 return ast::AstNode::Compound {
-                    block: self.resolve_block(
-                        block.clone(),
-                        current_loop_id,
-                        &mut identifier_map_copy,
-                    ),
+                    block: self.resolve_block(block, current_loop_id, &mut identifier_map_copy),
                 };
             }
 
@@ -803,19 +912,17 @@ impl<'variable_context> Parser<'variable_context> {
                 id,
             } => {
                 let mut identifier_map_copy = identifier_map.clone();
+                false_current_scope(&mut identifier_map_copy);
 
-                for map_entry in identifier_map_copy.values_mut() {
-                    if map_entry.from_current_scope == true {
-                        map_entry.from_current_scope = false;
+                //BAD, SHIT_MOUNT_CODE
+                if let ast::AstNode::Declaration { storage_class, .. } = init.as_ref() {
+                    if storage_class.as_ref() == &ast::AstNode::Static {
+                        panic!("for循环初始化语句不能有static前缀: {:?}", statement);
                     }
                 }
 
                 return ast::AstNode::For {
-                    init: Box::new(self.resolve_block_item(
-                        *init.clone(),
-                        None,
-                        &mut identifier_map_copy,
-                    )),
+                    init: Box::new(self.resolve_block_item(init, None, &mut identifier_map_copy)),
                     condition: Box::new(self.resolve_exp(condition, &identifier_map_copy)),
                     step: Box::new(self.resolve_exp(step, &identifier_map_copy)),
                     body: Box::new(self.resolve_statement(
@@ -833,13 +940,8 @@ impl<'variable_context> Parser<'variable_context> {
                 id,
             } => {
                 let mut identifier_map_copy = identifier_map.clone();
-
-                for map_entry in identifier_map_copy.values_mut() {
-                    if map_entry.from_current_scope == true {
-                        map_entry.from_current_scope = false;
-                    }
-                }
-
+                false_current_scope(&mut identifier_map_copy);
+            
                 return ast::AstNode::While {
                     condition: Box::new(self.resolve_exp(condition, &identifier_map_copy)),
                     body: Box::new(self.resolve_statement(
@@ -857,12 +959,7 @@ impl<'variable_context> Parser<'variable_context> {
                 id,
             } => {
                 let mut identifier_map_copy = identifier_map.clone();
-
-                for map_entry in identifier_map_copy.values_mut() {
-                    if map_entry.from_current_scope == true {
-                        map_entry.from_current_scope = false;
-                    }
-                }
+                false_current_scope(&mut identifier_map_copy);
 
                 return ast::AstNode::DoWhile {
                     body: Box::new(self.resolve_statement(
@@ -895,36 +992,6 @@ impl<'variable_context> Parser<'variable_context> {
             }
         }
     }
-
-    // fn label_statement(&mut self, statement: ast::AstNode, current_loop_id: i32) -> ast::AstNode {
-    //     match statement {
-    //         ast::AstNode::Compound { block } => {
-    //             let mut new_block = Vec::<ast::AstNode>::new();
-
-    //             for statement in block {
-    //                 new_block.push(self.label_statement(statement, current_label.clone()));
-    //             }
-
-    //             return ast::AstNode::Compound { block: new_block };
-    //         }
-
-    //         ast::AstNode::Break { .. } => {
-    //             return ast::AstNode::Break {
-    //                 id: current_loop_id,
-    //             };
-    //         }
-
-    //         ast::AstNode::Continue { .. } => {
-    //             return ast::AstNode::Continue {
-    //                 id: current_loop_id,
-    //             };
-    //         }
-
-    //         _ => {
-    //             panic!("label error!");
-    //         }
-    //     }
-    // }
 
     fn resolve_exp(
         &self,
@@ -1020,82 +1087,227 @@ impl<'variable_context> Parser<'variable_context> {
     //   Type Checking Part is Below
     // =======================
 
-    fn type_check_var_decl(&mut self, decl: &ast::AstNode) {
-        match decl {
-            ast::AstNode::Declaration { name, init } => {
-                self.symbol_table.insert(name.clone(), Type::Int);
+    fn type_check_file_scope_var_decl(&mut self, decl: &ast::AstNode) {
+        let ast::AstNode::Declaration {
+            name,
+            init,
+            storage_class,
+        } = decl
+        else {
+            panic!("");
+        };
 
-                if matches!(**init, ast::AstNode::NULL) {
-                    self.type_check_exp(init);
+        let mut initial_val = match init.as_ref() {
+            ast::AstNode::Constant { value } => symbol::InitialValue::Initial(value.clone()),
+            ast::AstNode::NULL => {
+                if matches!(storage_class.as_ref(), ast::AstNode::Extern) {
+                    symbol::InitialValue::NoInitializer
+                } else {
+                    symbol::InitialValue::Tentative
                 }
             }
+            _ => panic!("全局变量不使用常量初始化"),
+        };
 
-            _ => {
-                panic!("");
+        let mut new_global = !matches!(storage_class.as_ref(), ast::AstNode::Static);
+
+        if self.symbol_table.contains_key(name) {
+            let old_decl = self.symbol_table.get(name).unwrap();
+
+            let symbol::IdentifierAttrs::StaticAttr { init, global } = old_decl.attrs.clone()
+            else {
+                panic!("函数被再次声明为变量: {:#?}, {:#?}", old_decl, decl);
+            };
+
+            if !matches!(old_decl.type_, symbol::Type::Int) {
+                panic!("函数被再次声明为变量: {:#?}, {:#?}", old_decl, decl);
+            }
+
+            if matches!(storage_class.as_ref(), ast::AstNode::Extern) {
+                new_global = global;
+            } else if global != new_global {
+                panic!("变量链接属性冲突");
+            }
+
+            if matches!(init, symbol::InitialValue::Initial(..)) {
+                if matches!(initial_val, symbol::InitialValue::Initial(..)) {
+                    panic!("重复文件作用域变量定义");
+                } else {
+                    initial_val = init;
+                }
+            } else if !matches!(init, symbol::InitialValue::Initial(..))
+                && matches!(init, symbol::InitialValue::Tentative)
+            {
+                initial_val = symbol::InitialValue::Tentative;
+            }
+        }
+
+        let attrs = symbol::IdentifierAttrs::StaticAttr {
+            init: initial_val,
+            global: new_global,
+        };
+
+        self.symbol_table.insert(
+            name.clone(),
+            symbol::SymbolInfo {
+                type_: symbol::Type::Int,
+                attrs: attrs,
+            },
+        );
+    }
+
+    fn type_check_local_var_decl(&mut self, decl: &ast::AstNode) {
+        let ast::AstNode::Declaration {
+            name,
+            init,
+            storage_class,
+        } = decl
+        else {
+            panic!("");
+        };
+
+        if storage_class.as_ref() == &ast::AstNode::Extern {
+            if init.as_ref() != &ast::AstNode::NULL {
+                panic!("初始化局部extern变量声明")
+            }
+
+            if self.symbol_table.contains_key(name) {
+                let old_decl = self.symbol_table.get(name).unwrap();
+                if old_decl.type_ != symbol::Type::Int {
+                    panic!("函数被重复声明为变量");
+                }
+            } else {
+                self.symbol_table.insert(
+                    name.clone(),
+                    symbol::SymbolInfo {
+                        type_: symbol::Type::Int,
+                        attrs: symbol::IdentifierAttrs::StaticAttr {
+                            init: symbol::InitialValue::NoInitializer,
+                            global: true,
+                        },
+                    },
+                );
+            }
+        } else if storage_class.as_ref() == &ast::AstNode::Static {
+            let initial_val = if let ast::AstNode::Constant { value } = init.as_ref() {
+                symbol::InitialValue::Initial(value.clone())
+            } else if init.as_ref() == &ast::AstNode::NULL {
+                symbol::InitialValue::Initial(0)
+            } else {
+                panic!("非常数初始化 局部静态变量")
+            };
+
+            self.symbol_table.insert(
+                name.clone(),
+                symbol::SymbolInfo {
+                    type_: symbol::Type::Int,
+                    attrs: symbol::IdentifierAttrs::StaticAttr {
+                        init: initial_val,
+                        global: false,
+                    },
+                },
+            );
+        } else {
+            self.symbol_table.insert(
+                name.clone(),
+                symbol::SymbolInfo {
+                    type_: symbol::Type::Int,
+                    attrs: symbol::IdentifierAttrs::LocalAttr,
+                },
+            );
+
+            if init.as_ref() != &ast::AstNode::NULL {
+                self.type_check_exp(init);
             }
         }
     }
 
+    // fn type_check_var_decl(&mut self, decl: &ast::AstNode) {
+    //     let ast::AstNode::Declaration { name, init, storage_class } = decl else { panic!(""); };
+
+    //     self.symbol_table.insert(name.clone(), symbol::SymbolInfo { type_: symbol::Type::Int, attrs: symbol::IdentifierAttrs::LocalAttr });
+
+    //     if matches!(init.as_ref(), ast::AstNode::NULL) {
+    //         self.type_check_exp(init);
+    //     }
+    // }
+
     fn type_check_func_decl(&mut self, decl: &ast::AstNode) {
-        match decl {
-            ast::AstNode::FunctionDecl { name, params, body } => {
-                let has_body = !matches!(**body, ast::AstNode::NULL);
+        let ast::AstNode::FunctionDecl {
+            name,
+            params,
+            body,
+            storage_class,
+        } = decl
+        else {
+            panic!("");
+        };
 
-                let mut already_defined = false;
+        let has_body = !matches!(body.as_ref(), ast::AstNode::NULL);
+        let mut already_defined = false;
+        let mut new_global = !matches!(storage_class.as_ref(), ast::AstNode::Static);
 
-                if self.symbol_table.contains_key(name) {
-                    let old_decl = self.symbol_table.get(name);
+        if self.symbol_table.contains_key(name) {
+            let old_decl = self.symbol_table.get(name).unwrap();
+            let symbol::IdentifierAttrs::FuncAttr { defined, global } = old_decl.attrs else {
+                panic!("不合适的函数声明， 变量已用了的名字")
+            };
 
-                    //若符号已经声明过且不是函数类型（那就是变量）
-                    if let Some(Type::FunType {
-                        param_count,
-                        defined,
-                    }) = old_decl
-                    {
-                        already_defined = *defined;
-                    } else {
-                        panic!("Incompatible function declarations");
-                    }
-                }
+            //若符号已经声明过且不是函数类型（那就是变量）
+            if !matches!(old_decl.type_, symbol::Type::FunType { .. }) {
+                panic!("不合适的函数声明， 变量已用了的名字");
+            }
 
-                //函数重复定义
-                if already_defined && has_body {
-                    panic!("Function is defined more than once");
-                }
+            already_defined = defined;
+            if already_defined && has_body {
+                panic!("函数重复定义");
+            }
 
+            if global && matches!(storage_class.as_ref(), ast::AstNode::Static) {
+                panic!("非静态函数声明后面又有静态声明");
+            }
+            new_global = global;
+        }
+
+        let attrs = symbol::IdentifierAttrs::FuncAttr {
+            defined: already_defined || has_body,
+            global: new_global,
+        };
+        self.symbol_table.insert(
+            name.clone(),
+            symbol::SymbolInfo {
+                type_: symbol::Type::FunType {
+                    param_count: params.len() as i32,
+                },
+                attrs: attrs,
+            },
+        );
+
+        if has_body {
+            for param in params {
                 self.symbol_table.insert(
-                    name.clone(),
-                    Type::FunType {
-                        param_count: params.len() as i32,
-                        defined: already_defined || has_body,
+                    param.clone(),
+                    symbol::SymbolInfo {
+                        type_: symbol::Type::Int,
+                        attrs: symbol::IdentifierAttrs::LocalAttr,
                     },
                 );
-
-                if has_body {
-                    for param in params {
-                        self.symbol_table.insert(param.clone(), Type::Int);
-                    }
-
-                    self.type_check_compound(body);
-                }
             }
 
-            _ => {
-                panic!("");
-            }
+            self.type_check_compound(body);
         }
     }
 
     fn type_check_exp(&mut self, exp: &ast::AstNode) {
         match exp {
             ast::AstNode::FunctionCall { identifier, args } => {
-                if let Some(func_type) = self.symbol_table.get(identifier) {
-                    match func_type {
-                        Type::Int => {
+                if let Some(symbol_info) = self.symbol_table.get(identifier) {
+                    match symbol_info.type_ {
+                        symbol::Type::Int => {
                             panic!("变量被用作函数名: {}", identifier);
                         }
-                        Type::FunType { param_count, .. } => {
-                            if *param_count != args.len() as i32 {
+                        symbol::Type::FunType { param_count, .. } => {
+                            if param_count != args.len() as i32 {
                                 panic!(
                                     "函数调用参数数量错误: {} 期望 {}, 实际 {}",
                                     identifier,
@@ -1113,20 +1325,25 @@ impl<'variable_context> Parser<'variable_context> {
                 }
             }
 
+            //TODO: BUG
             ast::AstNode::Var { identifier } => {
                 if self.symbol_table.get(identifier).is_none() {
+                    println!("{:#?}", self.symbol_table);
                     panic!("未定义变量: {}", identifier);
                 }
 
-                if !matches!(self.symbol_table.get(identifier).unwrap(), Type::Int) {
+                if !matches!(
+                    self.symbol_table.get(identifier).unwrap().type_,
+                    symbol::Type::Int
+                ) {
                     panic!("函数名被用作变量: {}", identifier);
                 }
             }
 
             ast::AstNode::Binary {
-                binary_operator,
                 left,
                 right,
+                .. 
             } => {
                 self.type_check_exp(&left);
                 self.type_check_exp(&right);
@@ -1148,7 +1365,7 @@ impl<'variable_context> Parser<'variable_context> {
                 for block_item in block {
                     match block_item {
                         ast::AstNode::Declaration { .. } => {
-                            self.type_check_var_decl(block_item);
+                            self.type_check_local_var_decl(block_item);
                         }
                         ast::AstNode::FunctionDecl { .. } => {
                             self.type_check_func_decl(block_item);
@@ -1164,5 +1381,11 @@ impl<'variable_context> Parser<'variable_context> {
                 panic!("");
             }
         }
+    }
+}
+
+fn false_current_scope(map: &mut HashMap<String, MapEntry>) {
+    for entry in map.values_mut() {
+        entry.from_current_scope = false;
     }
 }

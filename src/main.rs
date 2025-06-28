@@ -4,8 +4,7 @@ mod lex;
 mod parse;
 mod tacky;
 mod global;
-
-
+mod symbol;
 
 
 use asmt::Asmt;
@@ -51,15 +50,7 @@ fn main() {
                 
                 final_stage = args.get(idx).expect("-s 参数缺失").clone();
 
-                let mut is_legel = false;
-
-                for stage in ALL_STAGE.iter() {
-                    if final_stage == *stage {
-                        is_legel = true;
-                        break;
-                    }
-                }
-                if !is_legel {
+                if !ALL_STAGE.contains(&final_stage.as_str()) {
                     panic!("无效的阶段名称: '{}'. 有效的阶段有: {:?}", final_stage, ALL_STAGE);
                 }
             }
@@ -92,7 +83,7 @@ fn main() {
     stage_msg(&tokens);
 
     let mut variable_context = global::VariableContext::new();
-    let mut symbol_table = std::collections::HashMap::<String, parse::parser::Type>::new();
+    let mut symbol_table = std::collections::HashMap::<String, symbol::SymbolInfo>::new();
 
     let mut parser = parse::parser::Parser::new(tokens, &mut variable_context, &mut symbol_table);
     
@@ -100,13 +91,13 @@ fn main() {
     
     stage_msg(&ast);
     
-    let mut tackilizer = tacky::Tackilizer::new(parser.variable_context);
+    let mut tackilizer = tacky::Tackilizer::new(parser.variable_context, parser.symbol_table);
 
     let tacky_p = tackilizer.emit_program(&ast.root);
 
     stage_msg(&tacky_p);
 
-    let mut asmt = Asmt::new();
+    let mut asmt = Asmt::new(tackilizer.symbol_table);
     let p = asmt.emit_program(&tacky_p);
 
     stage_msg(&p);

@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Integer(i32),       //Integer 1234
     Identifier(String), //Identifier main
@@ -19,6 +19,8 @@ pub enum TokenType {
     KeywordFor,      // for
     KeywordBreak,    // break
     KeywordContinue, // continue
+    KeywordStatic,   // static
+    KeywordExtern,   // extern
 
     Tilde,       // ~
     Hyphen,      // -
@@ -45,6 +47,11 @@ pub enum TokenType {
     Colon,        // :
 
     DoubleForwardSlash, // itself(
+
+    ForwardSlashAndStar, // /*
+    // StarAndForwardSlash,
+
+    Newline, // 换行符
 }
 
 impl TokenType {
@@ -73,14 +80,30 @@ impl TokenType {
 
 #[derive(Debug)]
 pub struct Token {
-    pub index: i32,
+    pub line_index: i32,
+    pub column_index: i32,
     pub token_type: TokenType,
 }
+
+// impl std::fmt::Display for Token {
+    
+// }
+
 
 #[derive(Debug)]
 pub struct TokenList {
     index: usize,
     tokens: Vec<Token>,
+}
+
+
+impl std::fmt::Display for TokenList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for token in &self.tokens {
+            writeln!(f, "{:?}", token)?;
+        }
+        Ok(())
+    }
 }
 
 impl TokenList {

@@ -1,14 +1,17 @@
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AstNode {
     Program {
-        function_decl: Vec<AstNode>,
+        declarations: Vec<AstNode>,
     },
-    // Function {
-    //     name: Box<AstNode>,             // 函数名（identifier）
-    //     block: Box<AstNode>, // 函数体（statement）
-    // },
+
+    //storage_class
+    Static, 
+    Extern,
+
+    //Type
+    TypeInt,
 
     //statement:
     Return {
@@ -50,16 +53,18 @@ pub enum AstNode {
     },
     NULL,
 
-    //declaration
+    //variable declaration
     Declaration {
         name: String,
         init: Box<AstNode>,
+        storage_class: Box<AstNode>,
     },
 
     FunctionDecl {
         name: String, 
         params: Vec<String>,
         body: Box<AstNode>, // optional
+        storage_class: Box<AstNode>,
     },
 
     // Identifier(String),
@@ -119,6 +124,8 @@ pub enum AstNode {
     Complement, // Bitwise NOT operator (~)
     Negate,     // Negation operator (-)
 }
+
+
 
 #[derive(Debug)]
 pub struct Ast {

@@ -1,5 +1,5 @@
 use crate::asmt;
-use std::{fs::File};
+use std::{fmt::write, fs::File};
 use std::io::Write;
 
 // Bring required types into scope
@@ -30,8 +30,13 @@ impl fmt::Display for Instruction {
 
             Instruction::JmpCC(cond_code, label) => write!(f, "j{}\t.L{}", cond_code, label),
 
-            Instruction::SetCC(cond_code, operand) => write!(f, "set{}\t{}", cond_code, operand.fmt_with_width(RegisterWidth::W8)),
-            
+            Instruction::SetCC(cond_code, operand) => write!(
+                f,
+                "set{}\t{}",
+                cond_code,
+                operand.fmt_with_width(RegisterWidth::W8)
+            ),
+
             Instruction::Label(label) => write!(f, ".L{}:", label),
 
             Instruction::DeallocateStack(op) => {
@@ -71,6 +76,7 @@ impl fmt::Display for Operand {
             Operand::Imm(i32) => write!(f, "${}", i32),
             Operand::Reg(reg) => write!(f, "{}", reg),
             Operand::Stack(offset) => write!(f, "{}(%rbp)", offset),
+            Operand::Data(identifier) => write!(f, "{}(%rip)", identifier),
 
             _ => {
                 panic!("");
@@ -94,7 +100,6 @@ impl Operand {
 }
 
 impl fmt::Display for Register {
-
     //生成所有寄存器各自名字的基底base
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -112,7 +117,6 @@ impl fmt::Display for Register {
 }
 
 impl Register {
-
     fn get_base(&self) -> String {
         match self {
             Register::AX => format!("%a"),
@@ -129,7 +133,6 @@ impl Register {
 
     //基于基底base和字长来生成完整的寄存器名字
     pub fn fmt_with_width(&self, mut width: Option<RegisterWidth>) -> String {
- 
         if width.is_none() {
             width = Some(RegisterWidth::W32);
         }
@@ -137,21 +140,18 @@ impl Register {
 
         let base = self.get_base();
         let reg_str = match self {
-            Register::AX | Register::CX | Register::DX | Register::DI | Register::SI => {
-                match width {
-                    RegisterWidth::W8 => format!("{}l", base),
-                    RegisterWidth::W32 => format!("e{}x", base),
-                    RegisterWidth::W64 => format!("r{}x", base),
-                }
-            }
+            Register::AX | Register::CX | Register::DX | Register::DI | Register::SI => match width
+            {
+                RegisterWidth::W8 => format!("{}l", base),
+                RegisterWidth::W32 => format!("e{}x", base),
+                RegisterWidth::W64 => format!("r{}x", base),
+            },
 
-            Register::R8 | Register::R9 | Register::R10 | Register::R11 => {
-                match width {
-                    RegisterWidth::W8 => format!("{}b", base),
-                    RegisterWidth::W32 => format!("{}d", base),
-                    RegisterWidth::W64 => format!("{}", base),
-                }
-            }
+            Register::R8 | Register::R9 | Register::R10 | Register::R11 => match width {
+                RegisterWidth::W8 => format!("{}b", base),
+                RegisterWidth::W32 => format!("{}d", base),
+                RegisterWidth::W64 => format!("{}", base),
+            },
         };
 
         format!("{}", reg_str)
@@ -182,7 +182,7 @@ pub fn emit_asm(assembly_ast: &asmt::Program, path: &String) {
     } else {
         format!("{}.S", path)
     };
-    
+
     let mut file = match File::create(file_path) {
         Ok(f) => f,
         Err(e) => {
@@ -201,14 +201,34 @@ pub fn emit_asm(assembly_ast: &asmt::Program, path: &String) {
 fn generate_at_program(program: &asmt::Program) -> String {
     let mut result = String::new();
 
-    for function_def in program.function_definitions.iter() {
-        result.push_str(&generate_at_function(&function_def));
+    for top_level in program.top_level_defs.iter() {
+        match top_level {
+            asmt::TopLevel::Function(function_def) => {
+                result.push_str(&generate_at_function(function_def));
+            }
+            asmt::TopLevel::StaticVariable(static_var) => {}
+        }
     }
 
-    
     //NOTE: 在windows不需要
     if cfg!(target_os = "linux") {
         result.push_str(".section .note.GNU-stack,\"\",@progbits\n");
+    }
+
+    return result;
+}
+
+fn generate_at_static_var(static_var: &asmt::StaticVariable) -> String {
+    let mut result = String::new();
+
+    if static_var.global == true {
+        result.push_str(format!("\n\t.globl {}", static_var.name).as_str());
+    }
+
+    if static_var.init != 0 {
+        result.push_str(format!("\n\t.data\n\t.align 4\n{}:\n\t.long {}", static_var.name, static_var.init).as_str());
+    } else {
+        result.push_str(format!("\n\t.bss\n\t.align 4\n{}:\n\t.zero 4", static_var.name).as_str());
     }
 
     return result;

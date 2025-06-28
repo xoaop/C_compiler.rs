@@ -1,16 +1,30 @@
 use std::collections::HashMap;
 
-use crate::tacky;
+use crate::{global, symbol, tacky};
 
 #[derive(Debug)]
 pub struct Program {
-    pub function_definitions: Vec<Function>,
+    pub top_level_defs: Vec<TopLevel>,
 }
 
 #[derive(Debug)]
 pub struct Function {
     pub identifier: String,
     pub instructions: Vec<Instruction>,
+    pub global: bool,
+}
+
+#[derive(Debug)]
+pub struct StaticVariable {
+    pub name: String,
+    pub global: bool,
+    pub init: i32,
+}
+
+#[derive(Debug)]
+pub enum TopLevel {
+    Function(Function),
+    StaticVariable(StaticVariable),
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +94,7 @@ pub enum Operand {
     Reg(Register),
     Pseudo(String), //虚拟寄存器
     Stack(i32),     // 获取 $(i64)(rbp)
+    Data(String),
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +129,7 @@ pub enum RegisterWidth {
 impl From<tacky::Operand> for Operand {
     fn from(value: tacky::Operand) -> Self {
         match value {
+
             tacky::Operand::Constant(val) => Operand::Imm(val),
             tacky::Operand::Var(id) => Operand::Pseudo(id.clone()),
             _ => {
@@ -139,25 +155,32 @@ impl From<tacky::Operator> for Operator {
 }
 
 #[derive(Debug)]
-pub struct Asmt {
+pub struct Asmt<'global> {
     name_map: HashMap<String, i32>,
 
     current_function_scope: String,
     stack_size_map: std::collections::HashMap<String, i32>,
+
+    symbol_table: &'global mut HashMap<String, symbol::SymbolInfo>,
 }
 
-impl Asmt {
-    pub fn new() -> Self {
+impl<'global> Asmt<'global> {
+    pub fn new(symbol_table: &'global mut HashMap<String, symbol::SymbolInfo>) -> Self {
         Asmt {
             name_map: HashMap::new(),
             current_function_scope: "there is no function name@#$%^&*+".to_string(),
             stack_size_map: std::collections::HashMap::<String, i32>::new(),
+            symbol_table: symbol_table,
         }
     }
 
-    fn pseudo_to_stack(&mut self, identifier: &str) -> Operand {
+    fn pseudo_to_memory(&mut self, identifier: &str) -> Operand {
         if self.name_map.contains_key(identifier) {
             return Operand::Stack(self.name_map.get(identifier).cloned().expect("Error!"));
+        }
+
+        if self.symbol_table.contains_key(identifier) {
+            return Operand::Data(identifier.to_string());
         }
 
         *self
@@ -181,13 +204,12 @@ impl Asmt {
 
     fn fix_operand(&mut self, op: &Operand) -> Operand {
         match op {
-            Operand::Pseudo(ident) => self.pseudo_to_stack(&ident),
+            Operand::Pseudo(ident) => self.pseudo_to_memory(&ident),
             _ => op.clone(),
         }
     }
 
     fn fix_allocate_stack(alloc_stack: Instruction) -> Option<Instruction> {
-
         if let Instruction::AllocateStack(op) = alloc_stack {
             match op {
                 Operand::Imm(size) => {
@@ -199,12 +221,11 @@ impl Asmt {
                     size += 16 - size % 16;
 
                     return Some(Instruction::AllocateStack(Operand::Imm(size)));
-                }, 
+                }
                 _ => {
                     panic!("");
                 }
             }
-            
         } else {
             panic!("");
         }
@@ -319,14 +340,13 @@ impl Asmt {
                 //         if stack_alloc_size != 0 {
                 //             stack_alloc_size += 16 - stack_alloc_size % 16;
                 //             insts.push(Instruction::AllocateStack(Operand::Imm(stack_alloc_size)));
-                //         } 
+                //         }
 
                 //     }
                 //     _ => {
                 //         panic!("");
                 //     }
                 // }
-
                 _ => {
                     insts.push(inst);
                 }
@@ -507,7 +527,6 @@ impl Asmt {
     }
 
     fn emit_function(&mut self, function: &tacky::Function) -> Function {
-
         let identifier = function.name.clone();
 
         self.current_function_scope = identifier.clone();
@@ -545,27 +564,46 @@ impl Asmt {
             .unwrap()
             .clone();
 
+        let fixed_alloc_stack = Self::fix_allocate_stack(Instruction::AllocateStack(Operand::Imm(stack_alloc_size)));
 
-        instructions.insert(
-            0,
-            Self::fix_allocate_stack(Instruction::AllocateStack(Operand::Imm(stack_alloc_size))).unwrap(),
-        );
-
+        if fixed_alloc_stack.is_some() {
+            instructions.insert(
+                0,
+                fixed_alloc_stack.unwrap(),
+            );
+        }
 
         Function {
             identifier: identifier,
             instructions: instructions,
+            global: function.global,
         }
     }
 
+    fn emit_static_var(&mut self, static_var: &tacky::StaticVariable) -> StaticVariable {
+        return StaticVariable {
+            name: static_var.name.clone(),
+            global: static_var.global,
+            init: static_var.init,
+        };
+    }
+
     pub fn emit_program(&mut self, program: &tacky::Program) -> Program {
-        let mut func_defs = Vec::<Function>::new();
-        for func_def in &program.functions {
-            func_defs.push(self.emit_function(func_def));
+        let mut top_level_defs = Vec::<TopLevel>::new();
+        for top_level in &program.top_levels {
+            match top_level {
+                tacky::TopLevel::Function(func) => {
+                    top_level_defs.push(TopLevel::Function(self.emit_function(func)));
+                }
+
+                tacky::TopLevel::StaticVariable(static_var) => {
+                    top_level_defs.push(TopLevel::StaticVariable(self.emit_static_var(static_var)));
+                }
+            }
         }
 
         return Program {
-            function_definitions: func_defs,
+            top_level_defs: top_level_defs,
         };
     }
 }
